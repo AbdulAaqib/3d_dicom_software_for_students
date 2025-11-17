@@ -9,9 +9,13 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@bitheral/marching-cubes": "^1.4.7",
+    "@kitware/vtk.js": "^28.2.1",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.4.0",
+    "dcmjs": "^0.18.11",
     "dicom-parser": "^1.8.21",
+    "itk-wasm": "^1.0.0-b.154",
     "next": "16.0.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",

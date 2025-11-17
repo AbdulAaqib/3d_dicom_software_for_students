@@ -21,12 +21,24 @@ export interface ParsedSlice {
   pixelSpacing?: [number, number];
   instanceNumber?: number;
   sliceLocation?: number;
+
+  // IDs
+  sopInstanceUID?: string;
 }
 
 export interface ParsedSeries {
   slices: ParsedSlice[]; // sorted
   spacing?: [number, number, number]; // x,y,z (mm)
   dimensions: [number, number, number]; // cols (x), rows (y), depth (z)
+  origin?: [number, number, number]; // ImagePositionPatient of first slice
+  orientation?: number[]; // 6 numbers from ImageOrientationPatient
+  // Study-level metadata
+  patientId?: string;
+  studyInstanceUID?: string;
+  seriesInstanceUID?: string;
+  frameOfReferenceUID?: string;
+  modality?: string;
+  studyDate?: string;
 }
 
 // ------------------ helpers ------------------
@@ -266,12 +278,27 @@ export async function parseDicomFiles(files: File[]): Promise<ParsedSeries> {
     throw new Error('No DICOM files provided');
   }
 
+  let patientId: string | undefined;
+  let studyInstanceUID: string | undefined;
+  let seriesInstanceUID: string | undefined;
+  let frameOfReferenceUID: string | undefined;
+  let modality: string | undefined;
+  let studyDate: string | undefined;
+
   for (const f of files) {
     const buf = await f.arrayBuffer();
     const byteArray = new Uint8Array(buf);
     const ds = dicomParser.parseDicom(byteArray);
 
     const tsuid = ds.string('x00020010');
+
+    // read IDs (if present)
+    if (!patientId) patientId = ds.string('x00100020') || ds.string('x00100021') || undefined; // PatientID or Issuer
+    if (!studyInstanceUID) studyInstanceUID = ds.string('x0020000d') || undefined; // StudyInstanceUID
+    if (!seriesInstanceUID) seriesInstanceUID = ds.string('x0020000e') || undefined; // SeriesInstanceUID
+    if (!frameOfReferenceUID) frameOfReferenceUID = ds.string('x00200052') || undefined; // FrameOfReferenceUID
+    if (!modality) modality = ds.string('x00080060') || undefined; // Modality
+    if (!studyDate) studyDate = ds.string('x00080020') || undefined; // StudyDate
 
     const rows = getUS(ds, 'x00280010'); // Rows (US)
     const cols = getUS(ds, 'x00280011'); // Columns (US)
@@ -309,6 +336,8 @@ export async function parseDicomFiles(files: File[]): Promise<ParsedSeries> {
       throw new Error(`Unsupported Transfer Syntax UID: ${tsuid}. Only uncompressed Little Endian and JPEG Baseline are supported in current MVP.`);
     }
 
+    const sopInstanceUID = ds.string('x00080018') || undefined; // SOPInstanceUID
+
     slices.push({
       fileName: f.name,
       rows,
@@ -327,6 +356,7 @@ export async function parseDicomFiles(files: File[]): Promise<ParsedSeries> {
       pixelSpacing: pixelSpacingArr,
       instanceNumber,
       sliceLocation,
+      sopInstanceUID,
     });
   }
 
@@ -337,25 +367,58 @@ export async function parseDicomFiles(files: File[]): Promise<ParsedSeries> {
   // sort slices
   slices.sort(bySlicePosition);
 
-  // estimate spacing (x,y from PixelSpacing; z from distance between positions)
-  let spacing: [number, number, number] | undefined = undefined;
+  // estimate spacing (x,y from PixelSpacing; z from slice separation projected along slice normal)
+  const ps = slices[0].pixelSpacing;
+  const spacingX = ps?.[1] ?? 1;
+  const spacingY = ps?.[0] ?? 1;
+  let spacingZ = 1;
   if (slices.length > 1) {
-    const ps = slices[0].pixelSpacing;
-    const z0 = slices[0].imagePosition?.[2];
-    const z1 = slices[1].imagePosition?.[2];
-    const dz = z0 != null && z1 != null ? Math.abs(z1 - z0) : 1;
-    spacing = [ps?.[1] ?? 1, ps?.[0] ?? 1, dz]; // cols x rows x depth
-  } else {
-    const ps = slices[0].pixelSpacing;
-    spacing = [ps?.[1] ?? 1, ps?.[0] ?? 1, 1];
+    const pos0 = slices[0].imagePosition;
+    const pos1 = slices[1].imagePosition;
+    if (pos0 && pos1) {
+      const diff: [number, number, number] = [pos1[0] - pos0[0], pos1[1] - pos0[1], pos1[2] - pos0[2]];
+      let dz = Math.hypot(diff[0], diff[1], diff[2]);
+      const ori = slices[0].imageOrientation;
+      if (ori && ori.length === 6) {
+        const row: [number, number, number] = [ori[0], ori[1], ori[2]];
+        const col: [number, number, number] = [ori[3], ori[4], ori[5]];
+        const normal: [number, number, number] = [
+          row[1] * col[2] - row[2] * col[1],
+          row[2] * col[0] - row[0] * col[2],
+          row[0] * col[1] - row[1] * col[0],
+        ];
+        const normLen = Math.hypot(normal[0], normal[1], normal[2]);
+        if (normLen > 1e-6) {
+          const unit: [number, number, number] = [normal[0] / normLen, normal[1] / normLen, normal[2] / normLen];
+          const projection = Math.abs(diff[0] * unit[0] + diff[1] * unit[1] + diff[2] * unit[2]);
+          if (projection > 1e-6) {
+            dz = projection;
+          }
+        }
+      }
+      spacingZ = dz > 1e-6 ? dz : 1;
+    }
   }
+  const spacing: [number, number, number] = [spacingX, spacingY, spacingZ];
 
   const rows0 = slices[0].rows;
   const cols0 = slices[0].cols;
+
+  const origin = slices[0].imagePosition;
+  const orientation = slices[0].imageOrientation;
+
   return {
     slices,
     spacing,
     dimensions: [cols0, rows0, slices.length],
+    origin,
+    orientation,
+    patientId,
+    studyInstanceUID,
+    seriesInstanceUID,
+    frameOfReferenceUID,
+    modality,
+    studyDate,
   };
 }
 

@@ -76,7 +76,7 @@ export default function SliceViewer() {
       const ar = volumeData.width / volumeData.height;
       let w = bounds.width;
       let h = w / ar;
-      const maxH = 480;
+      const maxH = 640;
       if (h > maxH) {
         h = maxH;
         w = h * ar;

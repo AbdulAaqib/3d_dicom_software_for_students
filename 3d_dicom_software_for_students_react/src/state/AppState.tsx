@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import type { Annotation, VolumeMeta, AnnotationExport, StudyMeta } from '@/types/annotation';
+import type { Annotation, VolumeMeta, AnnotationExport, StudyMeta, MeshData } from '@/types/annotation';
 import type { ParsedSeries } from '@/lib/dicom/parseDicom';
 
 export interface LoadedDicomFile {
@@ -18,9 +18,18 @@ export interface VolumeData {
   depth: number;
   frames8: Uint8ClampedArray[]; // each length = width*height
   spacing?: [number, number, number];
+  voxels?: Float32Array; // flattened volume (width*height*depth)
+  voxelMin?: number;
+  voxelMax?: number;
+  autoIso?: number;
 }
 
 type Tool = 'select' | 'marker' | 'arrow' | 'label';
+
+export interface ViewerSettings {
+  axialOpacity: number;
+  showSidebar: boolean;
+}
 
 interface AppState {
   files: LoadedDicomFile[];
@@ -36,6 +45,7 @@ interface AppState {
   setSelectedAnnotationId: (id?: string) => void;
 
   study?: StudyMeta;
+  setStudy: (meta?: StudyMeta) => void;
   volume: VolumeMeta;
   setVolume: (v: Partial<VolumeMeta>) => void;
 
@@ -51,6 +61,12 @@ interface AppState {
   tool: Tool;
   setTool: (t: Tool) => void;
 
+  viewerSettings: ViewerSettings;
+  updateViewerSettings: (patch: Partial<ViewerSettings>) => void;
+
+  generatedMesh?: MeshData;
+  setGeneratedMesh: (mesh?: MeshData) => void;
+
   exportAnnotations: () => string; // returns JSON string
 }
 
@@ -65,7 +81,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [sliceIndex, _setSliceIndex] = useState(0);
   const [tool, _setTool] = useState<Tool>('select');
   const [selectedAnnotationId, _setSelectedAnnotationId] = useState<string | undefined>(undefined);
-  const [study] = useState<StudyMeta | undefined>(undefined);
+  const [study, _setStudy] = useState<StudyMeta | undefined>(undefined);
+  const [viewerSettings, setViewerSettings] = useState<ViewerSettings>({ axialOpacity: 0.9, showSidebar: true });
+  const [generatedMesh, setGeneratedMeshState] = useState<MeshData | undefined>(undefined);
 
   const setFiles = useCallback((input: File[] | LoadedDicomFile[]) => {
     const arr = input as Array<LoadedDicomFile | File>;
@@ -106,6 +124,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
   const setSelectedAnnotationId = useCallback((id?: string) => _setSelectedAnnotationId(id), []);
 
+  const setStudy = useCallback((meta?: StudyMeta) => {
+    _setStudy(meta);
+  }, []);
+
   const setVolume = useCallback((v: Partial<VolumeMeta>) => {
     _setVolume((prev) => ({ ...prev, ...v }));
   }, []);
@@ -126,6 +148,14 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [volumeData]);
 
   const setTool = useCallback((t: Tool) => _setTool(t), []);
+
+  const updateViewerSettings = useCallback((patch: Partial<ViewerSettings>) => {
+    setViewerSettings((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const setGeneratedMesh = useCallback((mesh?: MeshData) => {
+    setGeneratedMeshState(mesh);
+  }, []);
 
   const exportAnnotations = useCallback(() => {
     const payload: AnnotationExport = {
@@ -149,6 +179,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     selectedAnnotationId,
     setSelectedAnnotationId,
     study,
+    setStudy,
     volume,
     setVolume,
     parsedSeries,
@@ -159,8 +190,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setSliceIndex,
     tool,
     setTool,
+    viewerSettings,
+    updateViewerSettings,
+    generatedMesh,
+    setGeneratedMesh,
     exportAnnotations,
-  }), [files, setFiles, annotations, addAnnotation, updateAnnotation, deleteAnnotation, clearAnnotations, selectedAnnotationId, setSelectedAnnotationId, study, volume, setVolume, parsedSeries, setParsedSeries, volumeData, setVolumeData, sliceIndex, setSliceIndex, tool, setTool, exportAnnotations]);
+  }), [files, setFiles, annotations, addAnnotation, updateAnnotation, deleteAnnotation, clearAnnotations, selectedAnnotationId, setSelectedAnnotationId, study, setStudy, volume, setVolume, parsedSeries, setParsedSeries, volumeData, setVolumeData, sliceIndex, setSliceIndex, tool, setTool, viewerSettings, updateViewerSettings, generatedMesh, setGeneratedMesh, exportAnnotations]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }

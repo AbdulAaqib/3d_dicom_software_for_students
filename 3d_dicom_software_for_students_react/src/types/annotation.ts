@@ -15,11 +15,23 @@ export interface Annotation {
   linkedToId?: string;
 }
 
+export interface VolumeData {
+  width: number;
+  height: number;
+  depth: number;
+  frames8: Uint8ClampedArray[]; // each length = width*height
+  spacing?: [number, number, number];
+  voxels?: Float32Array; // flattened volume (width*height*depth) in modality units
+  voxelMin?: number;
+  voxelMax?: number;
+  autoIso?: number;
+}
+
 export interface VolumeMeta {
-  dimensions?: [number, number, number]; // width,height,depth (voxels)
-  spacing?: [number, number, number]; // mm per voxel
-  orientation?: number[]; // 3x3 direction cosines (row/col/slice)
-  window?: { center?: number; width?: number };
+  dimensions?: [number, number, number];
+  spacing?: [number, number, number];
+  origin?: [number, number, number];
+  orientation?: number[];
 }
 
 export interface StudyMeta {
@@ -28,12 +40,20 @@ export interface StudyMeta {
   seriesInstanceUID?: string;
   modality?: string;
   studyDate?: string;
+  frameOfReferenceUID?: string;
 }
 
 export interface AnnotationExport {
   version: '1.0';
   study?: StudyMeta;
   volume: VolumeMeta;
+  volumeData?: VolumeData;
   annotations: Annotation[];
   exportedAt: string;
+}
+
+export interface MeshData {
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: Uint32Array;
 }
