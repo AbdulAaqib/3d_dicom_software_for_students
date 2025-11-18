@@ -45,3 +45,8 @@ dcm_examples/big_dicom/
 
 
 3d_dicom_software_for_students_streamlit/venv
+
+
+*.pyc
+
+3d_dicom_software_for_students_streamlit/streamlit/.cache
