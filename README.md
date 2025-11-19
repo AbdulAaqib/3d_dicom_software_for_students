@@ -28,6 +28,8 @@ streamlit run 3d_dicom_software_for_students_streamlit/streamlit/src/frontend/ap
 3. Pick the tissue preset, smoothing, and reduction options.
 4. Click `Convert` – the app stages files in `.cache/dicom_sessions/<job_id>` and
    invokes `dicom2stl --meta` to produce `output.stl` + `metadata.json`.
+5. After a successful run, hop to the `Workspace` tab to inspect, annotate, and chat
+   about the generated STL.
 
 All conversions stay local; reruns reuse cached directories so you can share the
 paths with the chatbot/tools.

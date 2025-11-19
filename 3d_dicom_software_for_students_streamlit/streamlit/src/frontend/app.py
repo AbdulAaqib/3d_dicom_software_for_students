@@ -41,7 +41,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+pending_redirect = st.session_state.pop("pending_workspace_redirect", False)
 active_page = render_navigation()
+if pending_redirect and active_page != "Workspace":
+    st.session_state["active_page"] = "Workspace"
+    st.rerun()
 
 if active_page == "Uploader":
     render_workspace_page()

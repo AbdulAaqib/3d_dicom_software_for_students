@@ -1,4 +1,4 @@
-"""STL viewer and snapshot annotation helpers."""
+"""STL viewer, annotations, and snapshots."""
 
 from __future__ import annotations
 
@@ -17,7 +17,13 @@ try:  # pragma: no cover - optional dependency
 except ImportError:  # pragma: no cover - optional dependency
     go = None
 
+try:  # pragma: no cover - optional dependency
+    from streamlit_plotly_events import plotly_events
+except ImportError:  # pragma: no cover - optional dependency
+    plotly_events = None  # type: ignore
+
 from backend import ConversionResult
+from backend.annotation_store import load_annotations, save_annotations
 
 try:
     from stl import mesh as np_stl
@@ -40,35 +46,40 @@ class MeshData:
     bounds: tuple[tuple[float, float], tuple[float, float], tuple[float, float]]
 
 
-def load_mesh_data(stl_path: Path) -> MeshData:
+@st.cache_resource(show_spinner=False)
+def _cached_mesh(path_str: str, mtime: float) -> MeshData:
+    path = Path(path_str)
     if np_stl is None:
         raise ViewerError(
             "The `numpy-stl` package is required for visualization. "
-            "Install it in your Streamlit environment: `pip install numpy-stl`."
+            "Install it via `pip install numpy-stl`."
         )
-
-    if not stl_path.exists():
-        raise ViewerError(f"STL file not found: {stl_path}")
-
-    stl_mesh = np_stl.Mesh.from_file(str(stl_path))
+    stl_mesh = np_stl.Mesh.from_file(str(path))
     triangles = stl_mesh.vectors  # (n, 3, 3)
     points = triangles.reshape(-1, 3)
-
     vertices, inverse = np.unique(points, axis=0, return_inverse=True)
     faces = inverse.reshape(-1, 3).astype(int)
-
     bounds = tuple(zip(vertices.min(axis=0), vertices.max(axis=0)))  # type: ignore[arg-type]
-
     return MeshData(vertices=vertices, faces=faces, bounds=bounds)
 
 
-def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] | None = None) -> go.Figure:
+def load_mesh_data(stl_path: Path) -> MeshData:
+    if not stl_path.exists():
+        raise ViewerError(f"STL file not found: {stl_path}")
+    return _cached_mesh(str(stl_path), stl_path.stat().st_mtime)
+
+
+def build_plot(
+    mesh: MeshData,
+    color: str = "#1f77b4",
+    annotations: list[dict] | None = None,
+    selected_point: dict | None = None,
+) -> go.Figure:
     if go is None:
         raise ViewerError(
             "Plotly is required for STL visualization. Install it via `pip install plotly`."
         )
 
-    # Create a simple mesh plot
     mesh3d = go.Mesh3d(
         x=mesh.vertices[:, 0],
         y=mesh.vertices[:, 1],
@@ -77,24 +88,23 @@ def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] |
         j=mesh.faces[:, 1],
         k=mesh.faces[:, 2],
         color=color,
-        opacity=0.9,
-        name="3D Mesh"
+        opacity=0.75,
+        lighting=dict(ambient=0.3, diffuse=0.6, specular=0.3),
+        name="Mesh",
     )
-    
-    fig = go.Figure(data=[mesh3d])
 
-    # Simple layout
+    fig = go.Figure(data=[mesh3d])
     fig.update_layout(
         scene=dict(
             xaxis=dict(showgrid=True, title="X"),
             yaxis=dict(showgrid=True, title="Y"),
             zaxis=dict(showgrid=True, title="Z"),
-            aspectmode="data"
+            aspectmode="data",
         ),
-        height=700,
-        width=None,
-        title=dict(text="3D STL Model", x=0.5, xanchor='center'),
-        showlegend=False
+        height=640,
+        margin=dict(l=0, r=0, t=24, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
     )
 
     if annotations:
@@ -103,6 +113,7 @@ def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] |
         zs = [ann["point"]["z"] for ann in annotations]
         labels = [ann["label"] for ann in annotations]
         colors = [ann.get("color", "#FF4136") for ann in annotations]
+
         fig.add_trace(
             go.Scatter3d(
                 x=xs,
@@ -112,14 +123,18 @@ def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] |
                 marker=dict(size=6, color=colors, symbol="diamond"),
                 text=labels,
                 textposition="top center",
-                name="Annotations",
+                name="Markers",
             )
         )
 
-        arrow_x, arrow_y, arrow_z, arrow_u, arrow_v, arrow_w, arrow_color = [], [], [], [], [], [], []
+        arrow_x, arrow_y, arrow_z, arrow_u, arrow_v, arrow_w = [], [], [], [], [], []
         for ann in annotations:
             direction = ann.get("direction", {"u": 0.0, "v": 0.0, "w": 0.0})
-            magnitude = math.sqrt(direction.get("u", 0.0) ** 2 + direction.get("v", 0.0) ** 2 + direction.get("w", 0.0) ** 2)
+            magnitude = math.sqrt(
+                direction.get("u", 0.0) ** 2
+                + direction.get("v", 0.0) ** 2
+                + direction.get("w", 0.0) ** 2
+            )
             if magnitude <= 1e-6:
                 continue
             arrow_x.append(ann["point"]["x"])
@@ -128,7 +143,6 @@ def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] |
             arrow_u.append(direction.get("u", 0.0))
             arrow_v.append(direction.get("v", 0.0))
             arrow_w.append(direction.get("w", 0.0))
-            arrow_color.append(ann.get("color", "#FF4136"))
 
         if arrow_x:
             fig.add_trace(
@@ -144,9 +158,21 @@ def build_plot(mesh: MeshData, color: str = "#1f77b4", annotations: list[dict] |
                     sizemode="absolute",
                     sizeref=10,
                     anchor="tail",
-                    name="Annotation arrows",
+                    name="Arrows",
                 )
             )
+
+    if selected_point:
+        fig.add_trace(
+            go.Scatter3d(
+                x=[selected_point.get("x", 0.0)],
+                y=[selected_point.get("y", 0.0)],
+                z=[selected_point.get("z", 0.0)],
+                mode="markers",
+                marker=dict(size=10, color="#FFD166", symbol="star"),
+                name="Current selection",
+            )
+        )
 
     return fig
 
@@ -161,23 +187,30 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
         st.warning("Latest conversion does not have an STL file yet.")
         return
 
-    # Debug info
-    with st.expander("Debug Information", expanded=False):
-        st.info(f"STL file: {latest_job.job.output_stl}")
-        file_size = latest_job.job.output_stl.stat().st_size / (1024 * 1024)  # Convert to MB
-        st.info(f"File size: {file_size:.2f} MB")
-
     try:
-        with st.spinner("Loading 3D mesh..."):
-            mesh = load_mesh_data(latest_job.job.output_stl)
-            st.success(f"Mesh loaded: {len(mesh.vertices)} vertices, {len(mesh.faces)} faces")
-        
+        mesh = load_mesh_data(latest_job.job.output_stl)
         annotations = _get_annotations(latest_job.job.job_id)
-        fig = build_plot(mesh, annotations=annotations)
-        
-        # Render using the standard Plotly chart (most stable across Streamlit releases)
+        selection = _get_selection(latest_job.job.job_id)
+        fig = build_plot(mesh, annotations=annotations, selected_point=selection)
+
         st.plotly_chart(fig, use_container_width=True, key=f"plotly-{latest_job.job.job_id}")
-        
+
+        if plotly_events:
+            with st.expander("Click-to-annotate (experimental)", expanded=False):
+                st.caption("Click anywhere on the mesh to record a point for your next marker.")
+                events = plotly_events(
+                    fig,
+                    click_event=True,
+                    select_event=False,
+                    hover_event=False,
+                    key=f"plotly-events-{latest_job.job.job_id}",
+                    override_height=480,
+                )
+                if events:
+                    _handle_plotly_click(latest_job.job.job_id, events[-1])
+        else:
+            st.caption("Install `streamlit-plotly-events` to enable click-to-annotate.")
+
         (x_bounds, y_bounds, z_bounds) = mesh.bounds
         st.caption(
             f"Bounds X[{x_bounds[0]:.1f}, {x_bounds[1]:.1f}] · "
@@ -187,13 +220,11 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
     except ViewerError as exc:
         st.error(str(exc))
         return
-    except Exception as exc:
-        st.error(f"Unexpected error while loading mesh: {str(exc)}")
-        import traceback
-        st.code(traceback.format_exc())
+    except Exception as exc:  # pragma: no cover - defensive
+        st.error(f"Unexpected error while loading mesh: {exc}")
         return
 
-    _render_annotation_tools(latest_job)
+    _render_annotation_tools(latest_job, selection=selection)
     _render_snapshot_section(latest_job)
 
 
@@ -257,19 +288,19 @@ def _render_snapshot_section(job: ConversionResult) -> None:
                 st.caption("Preview unavailable.")
 
 
-def _render_annotation_tools(job: ConversionResult) -> None:
+def _render_annotation_tools(job: ConversionResult, selection: dict | None) -> None:
     st.markdown("#### Annotations")
     st.caption(
-        "Click any region of the mesh to capture coordinates, then add a label and optional arrow direction."
+        "Click the mesh to capture coordinates, then add a label and optional arrow. "
+        "Annotations persist with the study and are available to ChatGPT tools."
     )
 
-    selection = _get_selection(job.job.job_id)
     if selection:
         st.success(
             f"Selected point at ({selection['x']:.1f}, {selection['y']:.1f}, {selection['z']:.1f})"
         )
     else:
-        st.info("Click on the mesh to choose a point for your next marker (coming soon).")
+        st.info("Click on the mesh to choose coordinates for your next marker.")
 
     with st.form(f"annotation-form-{job.job.job_id}"):
         label = st.text_input("Label", key=f"annotation-label-{job.job.job_id}")
@@ -294,39 +325,49 @@ def _render_annotation_tools(job: ConversionResult) -> None:
                 direction={"u": dx, "v": dy, "w": dz},
             )
             st.success("Annotation saved to this study.")
+            logger.info("Annotation saved for job %s", job.job.job_id)
 
     annotations = _get_annotations(job.job.job_id)
-    if annotations:
-        st.markdown("##### Existing annotations")
-        for annotation in reversed(annotations):
-            cols = st.columns([3, 1])
-            with cols[0]:
-                st.write(
-                    f"{annotation['label']} @ "
-                    f"({annotation['point']['x']:.1f}, {annotation['point']['y']:.1f}, {annotation['point']['z']:.1f})"
-                )
-            with cols[1]:
-                if st.button(
-                    "Delete",
-                    key=f"delete-annotation-{annotation['annotation_id']}",
-                    use_container_width=True,
-                ):
-                    _delete_annotation(job.job.job_id, annotation["annotation_id"])
-                    st.experimental_rerun()
+    if not annotations:
+        return
+
+    st.markdown("##### Existing annotations")
+    for annotation in reversed(annotations):
+        cols = st.columns([3, 1, 1])
+        with cols[0]:
+            st.write(
+                f"{annotation['label']} · "
+                f"({annotation['point']['x']:.1f}, {annotation['point']['y']:.1f}, {annotation['point']['z']:.1f})"
+            )
+        if cols[1].button("Center view", key=f"center-{annotation['annotation_id']}", width="stretch"):
+            _store_selection(job.job.job_id, annotation["point"])
+            st.rerun()
+        if cols[2].button("Delete", key=f"delete-{annotation['annotation_id']}", width="stretch"):
+            _delete_annotation(job.job.job_id, annotation["annotation_id"])
+            st.rerun()
 
 
 def _get_annotations(job_id: str) -> list[dict]:
     store = st.session_state.get(ANNOTATION_STATE_KEY, {})
     if not isinstance(store, dict):
         store = {}
+    if job_id not in store:
+        store[job_id] = load_annotations(job_id)
+        st.session_state[ANNOTATION_STATE_KEY] = store
     return list(store.get(job_id, []))
 
 
-def _add_annotation(job_id: str, *, label: str, color: str, point: dict, direction: dict) -> None:
+def _set_annotations(job_id: str, annotations: list[dict]) -> None:
     store = st.session_state.get(ANNOTATION_STATE_KEY, {})
     if not isinstance(store, dict):
         store = {}
-    annotations = list(store.get(job_id, []))
+    store[job_id] = annotations
+    st.session_state[ANNOTATION_STATE_KEY] = store
+    save_annotations(job_id, annotations)
+
+
+def _add_annotation(job_id: str, *, label: str, color: str, point: dict, direction: dict) -> None:
+    annotations = _get_annotations(job_id)
     annotations.append(
         {
             "annotation_id": uuid.uuid4().hex,
@@ -338,29 +379,22 @@ def _add_annotation(job_id: str, *, label: str, color: str, point: dict, directi
             "timestamp": time.time(),
         }
     )
-    store[job_id] = annotations
-    st.session_state[ANNOTATION_STATE_KEY] = store
+    _set_annotations(job_id, annotations)
 
 
 def _delete_annotation(job_id: str, annotation_id: str) -> None:
-    store = st.session_state.get(ANNOTATION_STATE_KEY, {})
-    if not isinstance(store, dict):
-        store = {}
-    annotations = [
-        ann for ann in store.get(job_id, []) if ann.get("annotation_id") != annotation_id
-    ]
-    store[job_id] = annotations
-    st.session_state[ANNOTATION_STATE_KEY] = store
+    annotations = [ann for ann in _get_annotations(job_id) if ann.get("annotation_id") != annotation_id]
+    _set_annotations(job_id, annotations)
 
 
-def _store_selection(job_id: str, event: dict) -> None:
+def _store_selection(job_id: str, point: dict) -> None:
     selection_store = st.session_state.get(ANNOTATION_SELECTION_KEY, {})
     if not isinstance(selection_store, dict):
         selection_store = {}
     selection_store[job_id] = {
-        "x": event.get("x", 0.0),
-        "y": event.get("y", 0.0),
-        "z": event.get("z", 0.0),
+        "x": float(point.get("x", 0.0)),
+        "y": float(point.get("y", 0.0)),
+        "z": float(point.get("z", 0.0)),
     }
     st.session_state[ANNOTATION_SELECTION_KEY] = selection_store
 
@@ -370,4 +404,12 @@ def _get_selection(job_id: str) -> dict | None:
     if not isinstance(selection_store, dict):
         return None
     return selection_store.get(job_id)
+
+
+def _handle_plotly_click(job_id: str, event: dict) -> None:
+    if not isinstance(event, dict):
+        return
+    if not {"x", "y", "z"} <= event.keys():
+        return
+    _store_selection(job_id, event)
 

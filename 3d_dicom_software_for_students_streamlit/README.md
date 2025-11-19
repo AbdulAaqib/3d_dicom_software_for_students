@@ -35,7 +35,8 @@ streamlit run 3d_dicom_software_for_students_streamlit/streamlit/src/frontend/ap
 ```
 
 The app auto-loads environment variables from `3d_dicom_software_for_students/.env`
-when available.
+when available. Use the sidebar to switch between `Upload & Convert`, `Workspace`
+(viewer + GPT + annotations), and `MCP Tools`.
 
 ---
 

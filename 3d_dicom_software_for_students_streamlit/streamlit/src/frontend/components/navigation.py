@@ -41,7 +41,7 @@ def render_navigation(entries: Iterable[PageEntry] | None = None) -> str:
 
         for entry in entries:
             button_type = "primary" if active == entry.name else "secondary"
-            if st.button(entry.label, use_container_width=True, type=button_type):
+            if st.button(entry.label, width="stretch", type=button_type):
                 active = entry.name
                 st.session_state["active_page"] = entry.name
 

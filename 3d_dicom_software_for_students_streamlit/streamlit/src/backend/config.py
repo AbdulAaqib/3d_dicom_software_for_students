@@ -62,3 +62,4 @@ def discover_samples(max_depth: int = 1) -> list[SampleSeries]:
 
     return samples
 
+

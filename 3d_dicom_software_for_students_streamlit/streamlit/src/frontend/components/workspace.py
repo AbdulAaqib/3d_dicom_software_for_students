@@ -60,7 +60,7 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
             "Convert uploaded study",
             type="primary",
             disabled=not files,
-            use_container_width=True,
+            width="stretch",
             key="convert-uploaded-study",
         )
 
@@ -83,8 +83,7 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                     progress_status.caption("Upload complete")
                     result = run_conversion_job(job, options)
                     push_job_to_session(result)
-                    st.session_state["active_page"] = "Workspace"
-                    st.rerun()
+                    st.session_state["pending_workspace_redirect"] = True
                 progress_status.empty()
                 return result
             except PipelineError as exc:
@@ -116,7 +115,7 @@ def _render_sample_card(container: "st.delta_generator.DeltaGenerator") -> Conve
             "Convert sample study",
             key="sample-run",
             type="secondary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if run_now:
@@ -125,8 +124,7 @@ def _render_sample_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                     job = stage_sample_series(samples[index].path)
                     result = run_conversion_job(job, options)
                     push_job_to_session(result)
-                    st.session_state["active_page"] = "Workspace"
-                    st.rerun()
+                    st.session_state["pending_workspace_redirect"] = True
                 return result
             except PipelineError as exc:
                 st.error(str(exc))

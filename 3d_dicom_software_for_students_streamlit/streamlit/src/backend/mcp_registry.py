@@ -9,6 +9,10 @@ import json
 import streamlit as st
 
 from .dicom_pipeline import ConversionResult
+from .annotation_store import (
+    load_annotations as load_annotations_from_disk,
+    list_all_annotations as list_all_annotations_from_disk,
+)
 
 
 ToolHandler = Callable[[dict], dict]
@@ -33,16 +37,18 @@ def _get_snapshots() -> list[dict]:
 
 
 def _get_annotations(job_id: str | None = None) -> list[dict]:
-    store = st.session_state.get("stl_annotations", {})
-    if not isinstance(store, dict):
-        store = {}
     if job_id:
-        return list(store.get(job_id, []))
-    # flatten
-    combined: list[dict] = []
-    for annotations in store.values():
-        combined.extend(list(annotations))
-    return combined
+        return list(load_annotations_from_disk(job_id))
+
+    conversions = _get_conversions()
+    job_ids = {conversion.job.job_id for conversion in conversions if conversion.job}
+    if job_ids:
+        annotations: list[dict] = []
+        for jid in job_ids:
+            annotations.extend(load_annotations_from_disk(jid))
+        return annotations
+
+    return list_all_annotations_from_disk()
 
 
 def _list_conversions(_: dict) -> dict:
