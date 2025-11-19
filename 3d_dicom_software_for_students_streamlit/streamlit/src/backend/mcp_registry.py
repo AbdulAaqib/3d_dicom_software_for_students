@@ -12,6 +12,7 @@ from .dicom_pipeline import ConversionResult
 from .annotation_store import (
     load_annotations as load_annotations_from_disk,
     list_all_annotations as list_all_annotations_from_disk,
+    list_all_snapshots as list_all_snapshots_from_disk,
 )
 
 
@@ -32,8 +33,12 @@ def _get_conversions() -> list[ConversionResult]:
 
 
 def _get_snapshots() -> list[dict]:
-    snapshots = st.session_state.get("stl_snapshots", [])
-    return snapshots if isinstance(snapshots, list) else []
+    snapshots = st.session_state.get("stl_snapshots")
+    if isinstance(snapshots, list):
+        return snapshots
+    snapshots = list_all_snapshots_from_disk()
+    st.session_state["stl_snapshots"] = snapshots
+    return snapshots
 
 
 def _get_annotations(job_id: str | None = None) -> list[dict]:

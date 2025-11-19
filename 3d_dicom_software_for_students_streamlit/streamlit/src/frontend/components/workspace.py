@@ -16,20 +16,22 @@ from backend import (
     stage_sample_series,
 )
 from .intro import render_intro_page
+from .viewer import render_viewer_panel
 
 
-def render_workspace_page() -> None:
-    """Render the primary workflow surface (upload + conversion)."""
+def render_workspace_shell(show_title: bool = True, show_intro: bool = True) -> None:
+    """Render upload cards, conversion status, and the 3D viewer."""
 
-    st.title("3D DICOM Workspace")
-    st.caption("Upload CT slices, convert with dicom2stl, and prep assets for ChatGPT.")
+    if show_title:
+        st.title("3D DICOM Workspace")
+        st.caption("Upload CT slices, convert with dicom2stl, and prep assets for ChatGPT.")
 
-    render_intro_page()
-    st.divider()
+    if show_intro:
+        render_intro_page()
+        st.divider()
 
-    col_upload, col_samples = st.columns(2)
-    upload_result = _render_upload_card(col_upload)
-    sample_result = _render_sample_card(col_samples)
+    upload_result = _render_upload_card(st.container())
+    sample_result = None
 
     result = upload_result or sample_result
 
@@ -38,6 +40,15 @@ def render_workspace_page() -> None:
 
     st.divider()
     _render_conversion_status()
+    st.divider()
+    st.subheader("3D Viewer & Snapshots")
+    render_viewer_panel(_get_latest_job())
+
+
+def render_workspace_page() -> None:
+    """Standalone workspace view used by the uploader page."""
+
+    render_workspace_shell(show_title=True, show_intro=True)
 
 
 def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> ConversionResult | None:
@@ -85,46 +96,6 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                     push_job_to_session(result)
                     st.session_state["pending_workspace_redirect"] = True
                 progress_status.empty()
-                return result
-            except PipelineError as exc:
-                st.error(str(exc))
-            except Exception as exc:  # pragma: no cover - defensive
-                st.exception(exc)
-
-    return None
-
-
-def _render_sample_card(container: "st.delta_generator.DeltaGenerator") -> ConversionResult | None:
-    samples = list_sample_series()
-    with container:
-        st.subheader("Or start from a bundled sample")
-        if not samples:
-            st.info("No sample datasets were found under `dcm_examples/big_dicom`.")
-            return None
-
-        sample_names = [sample.name for sample in samples]
-        index = st.selectbox(
-            "Choose a sample series",
-            options=range(len(samples)),
-            format_func=lambda idx: f"{sample_names[idx]} ({samples[idx].file_count} slices)",
-            key="sample-selector",
-        )
-        options = _render_option_controls(prefix="samples")
-
-        run_now = st.button(
-            "Convert sample study",
-            key="sample-run",
-            type="secondary",
-            width="stretch",
-        )
-
-        if run_now:
-            try:
-                with st.spinner(f"Copying {samples[index].name} and running dicom2stl..."):
-                    job = stage_sample_series(samples[index].path)
-                    result = run_conversion_job(job, options)
-                    push_job_to_session(result)
-                    st.session_state["pending_workspace_redirect"] = True
                 return result
             except PipelineError as exc:
                 st.error(str(exc))
@@ -228,4 +199,11 @@ def _render_conversion_banner(result: ConversionResult) -> None:
         st.error(
             f"dicom2stl failed (exit {result.return_code}). Check logs below for details."
         )
+
+
+def _get_latest_job() -> ConversionResult | None:
+    jobs: list[ConversionResult] = st.session_state.get("dicom_jobs", [])
+    if jobs:
+        return jobs[-1]
+    return None
 

@@ -67,3 +67,58 @@ def list_all_annotations(job_ids: Iterable[str] | None = None) -> list[dict]:
                     results.append(ann)
     return results
 
+
+def _snapshot_file(job_id: str) -> Path:
+    safe_id = _sanitize_job_id(job_id)
+    return CONVERSIONS_ROOT / safe_id / "artifacts" / "snapshots.json"
+
+
+def load_snapshots(job_id: str) -> list[dict]:
+    """Return saved snapshots for a job (empty list if none)."""
+
+    path = _snapshot_file(job_id)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text())
+        if isinstance(payload, list):
+            return [snap for snap in payload if isinstance(snap, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def save_snapshots(job_id: str, snapshots: list[dict]) -> None:
+    """Persist snapshot entries for a job."""
+
+    path = _snapshot_file(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for snap in snapshots:
+        snap.setdefault("job_id", job_id)
+    path.write_text(json.dumps(snapshots, indent=2))
+
+
+def list_all_snapshots(job_ids: Iterable[str] | None = None) -> list[dict]:
+    """Aggregate snapshots across jobs."""
+
+    results: list[dict] = []
+    if job_ids is None:
+        pattern = CONVERSIONS_ROOT.glob("*/artifacts/snapshots.json")
+        files = sorted(pattern, key=lambda p: p.stat().st_mtime, reverse=True)
+    else:
+        files = [_snapshot_file(job_id) for job_id in job_ids]
+
+    for path in files:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            continue
+        if isinstance(payload, list):
+            for snap in payload:
+                if isinstance(snap, dict):
+                    snap.setdefault("job_id", path.parents[1].name)
+                    results.append(snap)
+    return results
+

@@ -8,9 +8,11 @@ import base64
 import math
 import time
 import uuid
+from typing import Any
 
 import numpy as np
 import streamlit as st
+import plotly.io as pio
 
 try:  # pragma: no cover - optional dependency
     import plotly.graph_objects as go
@@ -23,7 +25,13 @@ except ImportError:  # pragma: no cover - optional dependency
     plotly_events = None  # type: ignore
 
 from backend import ConversionResult
-from backend.annotation_store import load_annotations, save_annotations
+from backend.annotation_store import (
+    load_annotations,
+    save_annotations,
+    save_snapshots,
+    list_all_snapshots,
+)
+from .annotator import render_snapshot_annotator
 
 try:
     from stl import mesh as np_stl
@@ -31,8 +39,6 @@ except ImportError:  # pragma: no cover - optional dependency
     np_stl = None
 
 
-ANNOTATION_STATE_KEY = "stl_annotations"
-ANNOTATION_SELECTION_KEY = "stl_annotation_candidate"
 
 
 class ViewerError(RuntimeError):
@@ -67,6 +73,61 @@ def load_mesh_data(stl_path: Path) -> MeshData:
     if not stl_path.exists():
         raise ViewerError(f"STL file not found: {stl_path}")
     return _cached_mesh(str(stl_path), stl_path.stat().st_mtime)
+
+
+def _figure_to_png(fig: "go.Figure", width: int = 1024, height: int = 768) -> bytes | None:
+    try:
+        return pio.to_image(fig, format="png", width=width, height=height, engine="kaleido")  # type: ignore[arg-type]
+    except Exception as exc:  # pragma: no cover - runtime guard
+        st.warning(f"Snapshot failed: {exc}")
+        return None
+
+
+def _append_snapshot_entry(job: ConversionResult, entry: dict[str, Any]) -> None:
+    snapshots = st.session_state.get("stl_snapshots", [])
+    if not isinstance(snapshots, list):
+        snapshots = []
+    snapshots.append(entry)
+    st.session_state["stl_snapshots"] = snapshots
+    _persist_snapshots(job.job.job_id)
+
+
+def _make_snapshot_entry(
+    job: ConversionResult,
+    *,
+    filename: str,
+    mime_type: str,
+    notes: str,
+    image_bytes: bytes,
+    captured_from_viewer: bool,
+) -> dict[str, Any]:
+    return {
+        "snapshot_id": uuid.uuid4().hex,
+        "job_id": job.job.job_id,
+        "source_stl": str(job.job.output_stl),
+        "filename": filename,
+        "mime_type": mime_type,
+        "notes": notes,
+        "timestamp": time.time(),
+        "data_base64": base64.b64encode(image_bytes).decode("ascii"),
+        "captured_from_viewer": captured_from_viewer,
+        "annotations2d": {"objects": []},
+    }
+
+
+def _persist_snapshots(job_id: str) -> None:
+    snapshots = st.session_state.get("stl_snapshots", [])
+    if not isinstance(snapshots, list):
+        snapshots = []
+    job_snaps = [snap for snap in snapshots if snap.get("job_id") == job_id]
+    save_snapshots(job_id, job_snaps)
+
+
+def _ensure_snapshot_cache() -> None:
+    if st.session_state.get("snapshot_cache_loaded"):
+        return
+    st.session_state["stl_snapshots"] = list_all_snapshots()
+    st.session_state["snapshot_cache_loaded"] = True
 
 
 def build_plot(
@@ -169,7 +230,7 @@ def build_plot(
                 y=[selected_point.get("y", 0.0)],
                 z=[selected_point.get("z", 0.0)],
                 mode="markers",
-                marker=dict(size=10, color="#FFD166", symbol="star"),
+                marker=dict(size=10, color="#FFD166", symbol="diamond-open"),
                 name="Current selection",
             )
         )
@@ -189,27 +250,16 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
 
     try:
         mesh = load_mesh_data(latest_job.job.output_stl)
-        annotations = _get_annotations(latest_job.job.job_id)
-        selection = _get_selection(latest_job.job.job_id)
-        fig = build_plot(mesh, annotations=annotations, selected_point=selection)
+        annotations = load_annotations(latest_job.job.job_id)
+        fig = build_plot(mesh, annotations=annotations, selected_point=None)
 
-        st.plotly_chart(fig, use_container_width=True, key=f"plotly-{latest_job.job.job_id}")
+        st.plotly_chart(
+            fig,
+            key=f"plotly-{latest_job.job.job_id}",
+            width="stretch",
+        )
 
-        if plotly_events:
-            with st.expander("Click-to-annotate (experimental)", expanded=False):
-                st.caption("Click anywhere on the mesh to record a point for your next marker.")
-                events = plotly_events(
-                    fig,
-                    click_event=True,
-                    select_event=False,
-                    hover_event=False,
-                    key=f"plotly-events-{latest_job.job.job_id}",
-                    override_height=480,
-                )
-                if events:
-                    _handle_plotly_click(latest_job.job.job_id, events[-1])
-        else:
-            st.caption("Install `streamlit-plotly-events` to enable click-to-annotate.")
+        st.caption("Capture snapshots below to add 2D markers, arrows, or labels.")
 
         (x_bounds, y_bounds, z_bounds) = mesh.bounds
         st.caption(
@@ -224,192 +274,73 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
         st.error(f"Unexpected error while loading mesh: {exc}")
         return
 
-    _render_annotation_tools(latest_job, selection=selection)
-    _render_snapshot_section(latest_job)
+    _render_snapshot_section(latest_job, fig)
 
 
-def _render_snapshot_section(job: ConversionResult) -> None:
+def _render_snapshot_section(job: ConversionResult, fig: go.Figure) -> None:
+    _ensure_snapshot_cache()
     st.markdown("#### Snapshot & annotation")
     st.caption(
-        "Capture a photo of the physical print, upload annotated renders, or jot down notes. "
-        "Snapshots are stored locally and will be exposed to the ChatGPT tools."
+        "Capture stills of the 3D mesh, annotate them directly below, and share them with the GPT assistant. "
+        "Snapshots stay local to this Streamlit session."
     )
 
-    with st.form("snapshot-form"):
-        uploaded_file = st.file_uploader(
-            "Upload an annotated image",
-            type=["png", "jpg", "jpeg"],
-            accept_multiple_files=False,
-            key="snapshot-upload",
-            help="Attach renders or photos you've already captured (camera optional).",
-        )
-        notes = st.text_area(
-            "Annotation / context",
-            placeholder="Describe what this snapshot highlights...",
-            key="snapshot-notes",
-        )
-        submitted = st.form_submit_button("Save snapshot", type="secondary")
-
-    if submitted:
-        file_obj = uploaded_file
-        if not file_obj:
-            st.warning("Upload an image to save a snapshot.")
-            return
-
-        entry = {
-            "snapshot_id": uuid.uuid4().hex,
-            "job_id": job.job.job_id,
-            "source_stl": str(job.job.output_stl),
-            "filename": file_obj.name,
-            "mime_type": file_obj.type,
-            "notes": notes,
-            "timestamp": time.time(),
-            "data_base64": base64.b64encode(file_obj.getvalue()).decode("ascii"),
-        }
-        snapshots = st.session_state.get("stl_snapshots", [])
-        if not isinstance(snapshots, list):
-            snapshots = []
-        snapshots.append(entry)
-        st.session_state["stl_snapshots"] = snapshots
-        st.success("Snapshot saved for the chatbot.")
+    capture_cols = st.columns([1, 3])
+    with capture_cols[0]:
+        capture = st.button("Capture current 3D view", key=f"capture-{job.job.job_id}")
+    if capture:
+        png_bytes = _figure_to_png(fig)
+        if png_bytes:
+            filename = f"{job.job.job_id}-{int(time.time())}.png"
+            entry = _make_snapshot_entry(
+                job,
+                filename=filename,
+                mime_type="image/png",
+                notes="Captured from 3D viewer",
+                image_bytes=png_bytes,
+                captured_from_viewer=True,
+            )
+            _append_snapshot_entry(job, entry)
+            st.success("Snapshot captured for annotation.")
 
     snapshots = st.session_state.get("stl_snapshots", [])
-    if snapshots:
+    job_snapshots = [
+        (idx, snap)
+        for idx, snap in enumerate(snapshots)
+        if snap.get("job_id") == job.job.job_id
+    ]
+
+    if job_snapshots:
         st.markdown("##### Saved snapshots")
-        for idx, snap in enumerate(reversed(snapshots[-5:]), start=1):
+        start_index = max(0, len(job_snapshots) - 5)
+        for offset in reversed(range(start_index, len(job_snapshots))):
+            snap_idx, snap = job_snapshots[offset]
             st.write(
-                f"{idx}. {snap['filename']} · id: {snap.get('snapshot_id','')[:8]} · "
+                f"{snap['filename']} · id: {snap.get('snapshot_id','')[:8]} · "
                 f"notes: {snap.get('notes') or '—'}"
             )
-            try:
-                image_bytes = base64.b64decode(snap["data_base64"])
-                st.image(image_bytes, width=240)
-            except Exception:  # pragma: no cover - defensive
-                st.caption("Preview unavailable.")
-
-
-def _render_annotation_tools(job: ConversionResult, selection: dict | None) -> None:
-    st.markdown("#### Annotations")
-    st.caption(
-        "Click the mesh to capture coordinates, then add a label and optional arrow. "
-        "Annotations persist with the study and are available to ChatGPT tools."
-    )
-
-    if selection:
-        st.success(
-            f"Selected point at ({selection['x']:.1f}, {selection['y']:.1f}, {selection['z']:.1f})"
-        )
+            preview_col, annot_col = st.columns([1, 2])
+            with preview_col:
+                try:
+                    image_bytes = base64.b64decode(snap["data_base64"])
+                    st.image(image_bytes, width=200)
+                except Exception:  # pragma: no cover - defensive
+                    st.caption("Preview unavailable.")
+            with annot_col:
+                with st.expander("Annotate / review", expanded=False):
+                    annotations2d = snap.get("annotations2d") or {"objects": []}
+                    if not isinstance(annotations2d, dict):
+                        annotations2d = {"objects": annotations2d}
+                    snap["annotations2d"] = annotations2d
+                    updated = render_snapshot_annotator(
+                        {**snap, "annotations2d": annotations2d},
+                        key_prefix=f"annot-{snap.get('snapshot_id','')}",
+                    )
+                    if updated is not None:
+                        snap["annotations2d"] = updated
+                        snapshots[snap_idx] = snap
+                        st.session_state["stl_snapshots"] = snapshots
+                        _persist_snapshots(snap.get("job_id", job.job.job_id))
+                        st.success("Snapshot annotations saved.")
     else:
-        st.info("Click on the mesh to choose coordinates for your next marker.")
-
-    with st.form(f"annotation-form-{job.job.job_id}"):
-        label = st.text_input("Label", key=f"annotation-label-{job.job.job_id}")
-        color = st.color_picker("Marker color", "#FF4136", key=f"annotation-color-{job.job.job_id}")
-        col_dx, col_dy, col_dz = st.columns(3)
-        dx = col_dx.number_input("Arrow X", value=0.0, step=0.5, key=f"annotation-dx-{job.job.job_id}")
-        dy = col_dy.number_input("Arrow Y", value=0.0, step=0.5, key=f"annotation-dy-{job.job.job_id}")
-        dz = col_dz.number_input("Arrow Z", value=10.0, step=0.5, key=f"annotation-dz-{job.job.job_id}")
-        submitted = st.form_submit_button("Add annotation", type="secondary")
-
-    if submitted:
-        if not selection:
-            st.warning("Select a point on the mesh before saving an annotation.")
-        elif not label.strip():
-            st.warning("Provide a label for this annotation.")
-        else:
-            _add_annotation(
-                job.job.job_id,
-                label=label.strip(),
-                color=color,
-                point=selection,
-                direction={"u": dx, "v": dy, "w": dz},
-            )
-            st.success("Annotation saved to this study.")
-            logger.info("Annotation saved for job %s", job.job.job_id)
-
-    annotations = _get_annotations(job.job.job_id)
-    if not annotations:
-        return
-
-    st.markdown("##### Existing annotations")
-    for annotation in reversed(annotations):
-        cols = st.columns([3, 1, 1])
-        with cols[0]:
-            st.write(
-                f"{annotation['label']} · "
-                f"({annotation['point']['x']:.1f}, {annotation['point']['y']:.1f}, {annotation['point']['z']:.1f})"
-            )
-        if cols[1].button("Center view", key=f"center-{annotation['annotation_id']}", width="stretch"):
-            _store_selection(job.job.job_id, annotation["point"])
-            st.rerun()
-        if cols[2].button("Delete", key=f"delete-{annotation['annotation_id']}", width="stretch"):
-            _delete_annotation(job.job.job_id, annotation["annotation_id"])
-            st.rerun()
-
-
-def _get_annotations(job_id: str) -> list[dict]:
-    store = st.session_state.get(ANNOTATION_STATE_KEY, {})
-    if not isinstance(store, dict):
-        store = {}
-    if job_id not in store:
-        store[job_id] = load_annotations(job_id)
-        st.session_state[ANNOTATION_STATE_KEY] = store
-    return list(store.get(job_id, []))
-
-
-def _set_annotations(job_id: str, annotations: list[dict]) -> None:
-    store = st.session_state.get(ANNOTATION_STATE_KEY, {})
-    if not isinstance(store, dict):
-        store = {}
-    store[job_id] = annotations
-    st.session_state[ANNOTATION_STATE_KEY] = store
-    save_annotations(job_id, annotations)
-
-
-def _add_annotation(job_id: str, *, label: str, color: str, point: dict, direction: dict) -> None:
-    annotations = _get_annotations(job_id)
-    annotations.append(
-        {
-            "annotation_id": uuid.uuid4().hex,
-            "job_id": job_id,
-            "label": label,
-            "color": color,
-            "point": point,
-            "direction": direction,
-            "timestamp": time.time(),
-        }
-    )
-    _set_annotations(job_id, annotations)
-
-
-def _delete_annotation(job_id: str, annotation_id: str) -> None:
-    annotations = [ann for ann in _get_annotations(job_id) if ann.get("annotation_id") != annotation_id]
-    _set_annotations(job_id, annotations)
-
-
-def _store_selection(job_id: str, point: dict) -> None:
-    selection_store = st.session_state.get(ANNOTATION_SELECTION_KEY, {})
-    if not isinstance(selection_store, dict):
-        selection_store = {}
-    selection_store[job_id] = {
-        "x": float(point.get("x", 0.0)),
-        "y": float(point.get("y", 0.0)),
-        "z": float(point.get("z", 0.0)),
-    }
-    st.session_state[ANNOTATION_SELECTION_KEY] = selection_store
-
-
-def _get_selection(job_id: str) -> dict | None:
-    selection_store = st.session_state.get(ANNOTATION_SELECTION_KEY, {})
-    if not isinstance(selection_store, dict):
-        return None
-    return selection_store.get(job_id)
-
-
-def _handle_plotly_click(job_id: str, event: dict) -> None:
-    if not isinstance(event, dict):
-        return
-    if not {"x", "y", "z"} <= event.keys():
-        return
-    _store_selection(job_id, event)
-
+        st.caption("No snapshots captured yet.")

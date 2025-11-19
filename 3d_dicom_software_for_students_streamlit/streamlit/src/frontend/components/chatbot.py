@@ -36,21 +36,47 @@ SYSTEM_PROMPT = textwrap.dedent(
     """
 ).strip()
 
+CHAT_LAYOUT_CSS = """
+<style>
+div[data-testid="column"]:has(div.workspace-pane) {
+    height: 100%;
+}
+.workspace-pane {
+    padding-bottom: 1rem;
+}
+div[data-testid="stChatMessageList"] {
+    max-height: 75vh;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+}
+</style>
+"""
+
+
 def render_chatbot_page(embed: bool = False) -> None:
-    """Render the STL viewer + conversational UI."""
+    """Render the conversational UI (viewer + GPT assistant)."""
 
     latest_job = _get_latest_job()
 
     if embed:
-        _render_chat_panel(compact=True)
+        render_chat_panel(compact=True)
         return
 
+    if latest_job is None:
+        st.title("Workspace")
+        st.warning("Upload a DICOM study on the Upload & Convert page to unlock the chatbot.")
+        if st.button("Go to Upload & Convert", type="primary"):
+            st.session_state["active_page"] = "Uploader"
+            st.rerun()
+        return
+
+    st.markdown(CHAT_LAYOUT_CSS, unsafe_allow_html=True)
     st.title("Workspace")
-    col_viewer, col_chat = st.columns((2, 1), gap="large")
+    col_viewer, col_chat = st.columns((3, 2), gap="large")
     with col_viewer:
         render_viewer_panel(latest_job)
     with col_chat:
-        _render_chat_panel(compact=False)
+        render_chat_panel(compact=False)
 
 
 def _render_context_metrics() -> None:
@@ -61,7 +87,7 @@ def _render_context_metrics() -> None:
     col_snaps.metric("Saved snapshots", len(snapshots))
 
 
-def _render_chat_panel(compact: bool) -> None:
+def render_chat_panel(compact: bool) -> None:
     if OpenAI is None:
         st.warning("Install the `openai` package to enable the chatbot (`pip install openai`).")
         return
@@ -96,6 +122,15 @@ def _render_chat_panel(compact: bool) -> None:
     )
 
     _render_history()
+    st.markdown(
+        """
+        <script>
+        const chatList = window.parent.document.querySelector('div[data-testid="stChatMessageList"]');
+        if (chatList) { chatList.scrollTop = chatList.scrollHeight; }
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if prompt := st.chat_input("Ask about the STL, annotations, or DICOM metadata"):
         st.session_state["chat_display_messages"].append({"role": "user", "content": prompt})
@@ -125,12 +160,19 @@ def _run_conversation(
 
         user_content = [{"type": "text", "text": prompt}]
         for snap in attachments:
-            if snap.get("notes"):
-                user_content.append(
-                    {"type": "text", "text": f"Snapshot note: {snap['notes']}"}
-                )
+            notes = snap.get("notes")
+            if notes:
+                user_content.append({"type": "text", "text": f"Snapshot note: {notes}"})
             data_url = f"data:{snap.get('mime_type','image/png')};base64,{snap['data_base64']}"
-            user_content.append({"type": "input_image", "image_url": {"url": data_url}})
+            user_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": data_url,
+                        "detail": "high",
+                    },
+                }
+            )
 
         messages.append({"role": "user", "content": user_content})
 
