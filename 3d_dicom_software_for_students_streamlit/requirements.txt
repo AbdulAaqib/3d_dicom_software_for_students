@@ -6,4 +6,3 @@ openai>=1.51.0
 python-dotenv>=1.0.1
 streamlit-plotly-events>=0.0.6
 kaleido>=0.2.1
-streamlit-drawable-canvas>=0.9.3

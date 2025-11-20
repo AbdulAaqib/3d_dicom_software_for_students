@@ -44,6 +44,9 @@ The latest mesh renders with Plotly’s `Mesh3d`. After inspecting the mesh you 
 - Add notes describing what the snapshot highlights.
 - Save it to session storage so the chatbot or MCP tools can retrieve both the
   image (base64) and its notes.
+- Open the new **snapshot canvas** (custom Streamlit component backed by Fabric.js) to draw markers,
+  arrows, labels, or freehand marks directly on the captured still. Saving produces both structured
+  annotation JSON and a flattened PNG preview that the chatbot can reference later.
 
 ### ChatGPT + MCP tools
 
@@ -61,7 +64,7 @@ The `Chatbot` tab wires OpenAI function-calling to local tools:
 Set either:
 
 - Standard OpenAI: `OPENAI_API_KEY` (+ optional `OPENAI_MODEL`, `OPENAI_BASE_URL`)
-- Azure OpenAI: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`,
+- GPT: `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`,
   `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_CHAT_DEPLOYMENT`
 
 Place them in `3d_dicom_software_for_students/.env` (auto-loaded at startup) or
@@ -98,6 +101,11 @@ you can also attach saved snapshots—the assistant receives them as multimodal 
 
 The app automatically checks `os.environ` first, then `st.secrets`, so the same code
 works locally and when deployed to Streamlit Cloud.
+
+- **Azure attachment tips** – GPT deployments currently limit multimodal inputs to five
+  inline images per request. The chatbot now packages annotated snapshots as inline `data:` URLs;
+  if a request with attachments fails, re-run with fewer images or verify the deployment supports
+  GPT‑4o style multimodal prompts.
 
 ### MCP tools catalog
 

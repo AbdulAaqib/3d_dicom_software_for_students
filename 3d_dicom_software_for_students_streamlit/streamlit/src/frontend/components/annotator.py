@@ -1,4 +1,4 @@
-"""Snapshot-based 2D annotation canvas."""
+"""Snapshot-based 2D annotation canvas backed by a custom Streamlit component."""
 
 from __future__ import annotations
 
@@ -8,111 +8,111 @@ from typing import Any
 
 import streamlit as st
 from PIL import Image
-from streamlit_drawable_canvas import st_canvas
-from streamlit.elements import image as st_image
+
+from .custom_canvas import render_snapshot_canvas
+
+try:  # Pillow>=9
+    RESAMPLE_LANCZOS = Image.Resampling.LANCZOS  # type: ignore[attr-defined]
+except AttributeError:  # pragma: no cover - fallback for older Pillow
+    RESAMPLE_LANCZOS = Image.LANCZOS  # type: ignore[attr-defined]
+
+def _snapshot_base64(snapshot: dict[str, Any]) -> str:
+    payload = snapshot.get("annotated_base64") or snapshot.get("data_base64")
+    if not payload:
+        raise ValueError("Snapshot is missing base64 payload.")
+    return payload
 
 
-def _ensure_image_to_url() -> None:
-    if hasattr(st_image, "image_to_url"):
-        return
-
-    def image_to_url(image, width, clamp, channels, output_format, image_id):
-        fmt = (output_format or "PNG").upper()
-        buffer = BytesIO()
-        image.save(buffer, format=fmt)
-        data = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/{fmt.lower()};base64,{data}"
-
-    st_image.image_to_url = image_to_url
+def _load_snapshot_image(snapshot: dict[str, Any]) -> Image.Image:
+    raw = _snapshot_base64(snapshot)
+    data = base64.b64decode(raw)
+    return Image.open(BytesIO(data)).convert("RGBA")
 
 
-_ensure_image_to_url()
+def _snapshot_frame_dimensions(snapshot: dict[str, Any], max_width: int = 900) -> tuple[int, int]:
+    image = _load_snapshot_image(snapshot)
+    width, height = image.size
+    if width <= max_width:
+        return width, height
+    scale = max_width / width
+    return max_width, int(height * scale)
 
 
-def _load_background_image(snapshot: dict[str, Any], max_width: int = 900) -> Image.Image:
-    data = base64.b64decode(snapshot["data_base64"])
-    image = Image.open(BytesIO(data)).convert("RGBA")
-    if image.width <= max_width:
-        return image
-    scale = max_width / image.width
-    new_size = (max_width, int(image.height * scale))
-    return image.resize(new_size)
+def _prefer_existing_annotations(snapshot: dict[str, Any]) -> dict[str, Any]:
+    annotations = snapshot.get("annotations2d")
+    if isinstance(annotations, dict):
+        return annotations
+    if isinstance(annotations, list):
+        return {"objects": annotations}
+    return {"objects": []}
 
 
-def render_snapshot_annotator(snapshot: dict[str, Any], *, key_prefix: str = "annotator") -> dict[str, Any] | None:
+def _background_data_url(snapshot: dict[str, Any]) -> str:
+    mime_type = snapshot.get("mime_type", "image/png")
+    return f"data:{mime_type};base64,{_snapshot_base64(snapshot)}"
+
+
+def _composite_with_background(snapshot: dict[str, Any], overlay_data_url: str) -> str:
+    """Blend the user's drawing overlay with the snapshot background."""
+
+    overlay_payload = overlay_data_url.split(",", 1)[-1]
+    overlay = Image.open(BytesIO(base64.b64decode(overlay_payload))).convert("RGBA")
+
+    background = _load_snapshot_image(snapshot)
+    if background.size != overlay.size:
+        background = background.resize(overlay.size, RESAMPLE_LANCZOS)
+
+    combined = Image.alpha_composite(background, overlay)
+    buffer = BytesIO()
+    combined.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def render_snapshot_annotator(
+    snapshot: dict[str, Any],
+    *,
+    key_prefix: str = "annotator",
+) -> dict[str, Any] | None:
     """Render a drawable canvas for the given snapshot.
 
     Returns the updated annotation json payload when the user saves changes.
     """
 
     snapshot_id = snapshot.get("snapshot_id", "snapshot")
-    container = st.container()
-    with container:
-        st.markdown("##### Annotate snapshot")
-        col_mode, col_color, col_text = st.columns([1.2, 1, 1.4])
-        mode = col_mode.selectbox(
-            "Tool",
-            options=["Marker", "Arrow", "Label"],
-            key=f"{key_prefix}-mode-{snapshot_id}",
-        )
-        color = col_color.color_picker(
-            "Color",
-            value="#FF4136",
-            key=f"{key_prefix}-color-{snapshot_id}",
-        )
-        label_text = col_text.text_input(
-            "Label text",
-            key=f"{key_prefix}-text-{snapshot_id}",
-            placeholder="Label content (used when tool=Label)",
-        )
+    frame_width, frame_height = _snapshot_frame_dimensions(snapshot)
+    annotations = _prefer_existing_annotations(snapshot)
+    data_url = _background_data_url(snapshot)
 
-        drawing_mode_map = {
-            "Marker": "circle",
-            "Arrow": "line",
-            "Label": "rect",
-        }
-        drawing_mode = drawing_mode_map[mode]
+    canvas_result = render_snapshot_canvas(
+        background_base64=data_url,
+        mime_type=snapshot.get("mime_type", "image/png"),
+        initial_annotations=annotations,
+        stroke_color="#FF4136",
+        default_tool="marker",
+        label_text="",
+        width=frame_width,
+        height=frame_height,
+        show_toolbar=True,
+        key=f"{key_prefix}-canvas-{snapshot_id}",
+    )
 
-        bg_image = _load_background_image(snapshot)
-        canvas_json = snapshot.get("annotations2d")
+    if canvas_result is None:
+        return None
 
-        canvas_result = st_canvas(
-            fill_color=f"{color}55",
-            stroke_width=3,
-            stroke_color=color,
-            background_color="#ffffff",
-            background_image=bg_image,
-            update_streamlit=True,
-            height=bg_image.height,
-            width=bg_image.width,
-            drawing_mode=drawing_mode,
-            initial_drawing=canvas_json,
-            key=f"{key_prefix}-canvas-{snapshot_id}",
-        )
+    updated_annotations = canvas_result.annotations
+    annotated_base64 = None
+    if canvas_result.image_data_url:
+        try:
+            annotated_base64 = _composite_with_background(snapshot, canvas_result.image_data_url)
+        except Exception:  # pragma: no cover - fallback if PIL merge fails
+            image_data = canvas_result.image_data_url
+            annotated_base64 = (
+                image_data.split(",", 1)[-1] if "base64," in image_data else image_data
+            )
 
-        col_actions = st.columns([1, 1, 2])
-        save_pressed = col_actions[0].button(
-            "Save annotations",
-            key=f"{key_prefix}-save-{snapshot_id}",
-            type="primary",
-        )
-        clear_pressed = col_actions[1].button(
-            "Clear",
-            key=f"{key_prefix}-clear-{snapshot_id}",
-        )
-
-        if clear_pressed:
-            return {"objects": []}
-
-        if save_pressed:
-            data = {"objects": []}
-            if canvas_result and canvas_result.json_data:
-                data = canvas_result.json_data
-            if mode == "Label" and label_text:
-                for obj in data.get("objects", []):
-                    if obj.get("type") == "rect" and not obj.get("labelText"):
-                        obj["labelText"] = label_text
-            return data
-
-    return None
+    return {
+        "annotations": updated_annotations,
+        "annotated_base64": annotated_base64,
+        "reason": canvas_result.reason,
+    }
 

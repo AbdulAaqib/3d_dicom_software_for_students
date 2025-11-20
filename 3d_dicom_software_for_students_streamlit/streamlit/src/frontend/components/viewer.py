@@ -12,18 +12,10 @@ from typing import Any
 
 import numpy as np
 import streamlit as st
-import plotly.io as pio
-
 try:  # pragma: no cover - optional dependency
     import plotly.graph_objects as go
 except ImportError:  # pragma: no cover - optional dependency
     go = None
-
-try:  # pragma: no cover - optional dependency
-    from streamlit_plotly_events import plotly_events
-except ImportError:  # pragma: no cover - optional dependency
-    plotly_events = None  # type: ignore
-
 from backend import ConversionResult
 from backend.annotation_store import (
     load_annotations,
@@ -32,6 +24,7 @@ from backend.annotation_store import (
     list_all_snapshots,
 )
 from .annotator import render_snapshot_annotator
+from .custom_canvas import render_model_capture
 
 try:
     from stl import mesh as np_stl
@@ -74,13 +67,6 @@ def load_mesh_data(stl_path: Path) -> MeshData:
         raise ViewerError(f"STL file not found: {stl_path}")
     return _cached_mesh(str(stl_path), stl_path.stat().st_mtime)
 
-
-def _figure_to_png(fig: "go.Figure", width: int = 1024, height: int = 768) -> bytes | None:
-    try:
-        return pio.to_image(fig, format="png", width=width, height=height, engine="kaleido")  # type: ignore[arg-type]
-    except Exception as exc:  # pragma: no cover - runtime guard
-        st.warning(f"Snapshot failed: {exc}")
-        return None
 
 
 def _append_snapshot_entry(job: ConversionResult, entry: dict[str, Any]) -> None:
@@ -253,13 +239,9 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
         annotations = load_annotations(latest_job.job.job_id)
         fig = build_plot(mesh, annotations=annotations, selected_point=None)
 
-        st.plotly_chart(
-            fig,
-            key=f"plotly-{latest_job.job.job_id}",
-            width="stretch",
+        st.caption(
+            "Use the interactive viewer below to orbit the mesh and capture exactly what you see."
         )
-
-        st.caption("Capture snapshots below to add 2D markers, arrows, or labels.")
 
         (x_bounds, y_bounds, z_bounds) = mesh.bounds
         st.caption(
@@ -274,35 +256,46 @@ def render_viewer_panel(latest_job: ConversionResult | None) -> None:
         st.error(f"Unexpected error while loading mesh: {exc}")
         return
 
-    _render_snapshot_section(latest_job, fig)
+    _render_capture_canvas(latest_job, fig)
+    _render_snapshot_gallery(latest_job)
 
 
-def _render_snapshot_section(job: ConversionResult, fig: go.Figure) -> None:
-    _ensure_snapshot_cache()
-    st.markdown("#### Snapshot & annotation")
+def _render_capture_canvas(job: ConversionResult, fig: go.Figure) -> None:
+    st.markdown("#### Snapshot capture")
     st.caption(
-        "Capture stills of the 3D mesh, annotate them directly below, and share them with the GPT assistant. "
+        "Rotate or zoom the live viewer below to the desired angle, then capture a still that exactly matches what you see. "
         "Snapshots stay local to this Streamlit session."
     )
 
-    capture_cols = st.columns([1, 3])
-    with capture_cols[0]:
-        capture = st.button("Capture current 3D view", key=f"capture-{job.job.job_id}")
-    if capture:
-        png_bytes = _figure_to_png(fig)
-        if png_bytes:
+    capture_payload = render_model_capture(
+        figure=fig.to_plotly_json(),
+        width=1024,
+        height=768,
+        key=f"capture-{job.job.job_id}",
+    )
+    if capture_payload and capture_payload.get("image_data"):
+        try:
+            encoded = capture_payload["image_data"]
+            png_bytes = base64.b64decode(encoded.split(",", 1)[-1])
             filename = f"{job.job.job_id}-{int(time.time())}.png"
             entry = _make_snapshot_entry(
                 job,
                 filename=filename,
                 mime_type="image/png",
-                notes="Captured from 3D viewer",
+                notes=capture_payload.get("notes") or "Captured from 3D viewer",
                 image_bytes=png_bytes,
                 captured_from_viewer=True,
             )
             _append_snapshot_entry(job, entry)
             st.success("Snapshot captured for annotation.")
+        except Exception as exc:  # pragma: no cover - defensive
+            st.error(f"Snapshot capture failed: {exc}")
 
+
+def _render_snapshot_gallery(job: ConversionResult) -> None:
+    _ensure_snapshot_cache()
+
+    st.markdown("#### Saved snapshots & annotation")
     snapshots = st.session_state.get("stl_snapshots", [])
     job_snapshots = [
         (idx, snap)
@@ -311,7 +304,7 @@ def _render_snapshot_section(job: ConversionResult, fig: go.Figure) -> None:
     ]
 
     if job_snapshots:
-        st.markdown("##### Saved snapshots")
+        st.caption("Review prior captures, add 2D arrows or labels, and share them with the GPT assistant.")
         start_index = max(0, len(job_snapshots) - 5)
         for offset in reversed(range(start_index, len(job_snapshots))):
             snap_idx, snap = job_snapshots[offset]
@@ -319,15 +312,15 @@ def _render_snapshot_section(job: ConversionResult, fig: go.Figure) -> None:
                 f"{snap['filename']} · id: {snap.get('snapshot_id','')[:8]} · "
                 f"notes: {snap.get('notes') or '—'}"
             )
-            preview_col, annot_col = st.columns([1, 2])
-            with preview_col:
-                try:
-                    image_bytes = base64.b64decode(snap["data_base64"])
-                    st.image(image_bytes, width=200)
-                except Exception:  # pragma: no cover - defensive
-                    st.caption("Preview unavailable.")
-            with annot_col:
-                with st.expander("Annotate / review", expanded=False):
+            try:
+                encoded = snap.get("annotated_base64") or snap.get("data_base64")
+                if not encoded:
+                    raise ValueError("Snapshot missing image data.")
+                image_bytes = base64.b64decode(encoded)
+                st.image(image_bytes, width=320)
+            except Exception:  # pragma: no cover - defensive
+                st.caption("Preview unavailable.")
+            with st.expander("Annotate / review", expanded=False):
                     annotations2d = snap.get("annotations2d") or {"objects": []}
                     if not isinstance(annotations2d, dict):
                         annotations2d = {"objects": annotations2d}
@@ -337,10 +330,17 @@ def _render_snapshot_section(job: ConversionResult, fig: go.Figure) -> None:
                         key_prefix=f"annot-{snap.get('snapshot_id','')}",
                     )
                     if updated is not None:
-                        snap["annotations2d"] = updated
+                        snap["annotations2d"] = updated.get("annotations", {"objects": []})
+                        annotated_base64 = updated.get("annotated_base64")
+                        if annotated_base64:
+                            snap["annotated_base64"] = annotated_base64
+                            snap["data_base64"] = annotated_base64
                         snapshots[snap_idx] = snap
-                        st.session_state["stl_snapshots"] = snapshots
+                        st.session_state["stl_snapshots"] = snapshots[:]
                         _persist_snapshots(snap.get("job_id", job.job.job_id))
-                        st.success("Snapshot annotations saved.")
+                        if updated.get("reason") == "clear":
+                            st.info("Snapshot annotations cleared.")
+                        else:
+                            st.success("Snapshot annotations saved.")
     else:
         st.caption("No snapshots captured yet.")
