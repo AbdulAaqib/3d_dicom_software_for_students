@@ -849,7 +849,7 @@ def _render_annotation_editor(job: ConversionResult, annotations: list[dict]) ->
             notes = ann.get("notes") or ""
             ann_id = ann.get("annotation_id") or f"{job.job.job_id}-{idx}"
             kind = (ann.get("kind") or "marker").capitalize()
-            info_col, action_col = st.columns([5, 1])
+            info_col, action_col = st.columns([5, 2])
             info_col.write(f"**[{kind}] {label}** · {_format_point(point)}")
             info_col.caption(f"Color: `{color}`")
             if notes:
@@ -858,7 +858,12 @@ def _render_annotation_editor(job: ConversionResult, annotations: list[dict]) ->
                 info_col.caption(f"Vector: {_format_vector(ann.get('direction'))}")
             if ann.get("kind") == "label":
                 info_col.caption(f"Size: {float(ann.get('size', 18.0)):.1f}")
-            if action_col.button("Delete", key=f"delete-ann-{ann_id}"):
+            if action_col.button(
+                "Delete annotation",
+                key=f"delete-ann-{ann_id}",
+                use_container_width=True,
+                type="secondary",
+            ):
                 annotations.pop(idx)
                 save_annotations(job.job.job_id, annotations)
                 _set_flash_message(f'Deleted annotation "{label}".')
