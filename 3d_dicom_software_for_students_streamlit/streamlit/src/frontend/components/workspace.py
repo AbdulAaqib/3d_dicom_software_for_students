@@ -42,7 +42,7 @@ def render_workspace_shell(show_title: bool = True, show_intro: bool = True) -> 
     _render_conversion_status()
     st.divider()
     st.subheader("3D Viewer & Snapshots")
-    render_viewer_panel(_get_latest_job())
+    render_viewer_panel(_get_latest_job(), enable_tools=False)
 
 
 def render_workspace_page() -> None:
@@ -94,7 +94,7 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                     progress_status.caption("Upload complete")
                     result = run_conversion_job(job, options)
                     push_job_to_session(result)
-                    st.session_state["pending_workspace_redirect"] = True
+                    _reset_uploader_state()
                 progress_status.empty()
                 return result
             except PipelineError as exc:
@@ -206,4 +206,11 @@ def _get_latest_job() -> ConversionResult | None:
     if jobs:
         return jobs[-1]
     return None
+
+
+def _reset_uploader_state() -> None:
+    """Clear uploader widgets so users can queue another conversion without reloading."""
+
+    st.session_state.pop("dicom-upload", None)
+    st.session_state.pop("convert-uploaded-study", None)
 

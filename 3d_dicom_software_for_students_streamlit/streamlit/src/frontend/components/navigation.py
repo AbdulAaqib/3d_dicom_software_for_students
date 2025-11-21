@@ -50,6 +50,7 @@ def render_navigation(entries: Iterable[PageEntry] | None = None) -> str:
             if st.button(entry.label, width="stretch", type=button_type, disabled=disabled):
                 active = entry.name
                 st.session_state["active_page"] = entry.name
+                st.rerun()
             if disabled:
                 st.caption("Upload a DICOM and finish conversion to unlock the workspace.")
 

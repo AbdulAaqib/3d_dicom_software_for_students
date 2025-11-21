@@ -102,7 +102,7 @@ def render_chatbot_page(embed: bool = False) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with viewer_col:
-        render_viewer_panel(latest_job)
+        render_viewer_panel(latest_job, enable_tools=True)
         _render_context_metrics()
 
 

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist-min";
-import type { PlotlyHTMLElement, PlotRelayoutEvent, SceneCamera } from "plotly.js";
+import type {
+  PlotlyHTMLElement,
+  PlotRelayoutEvent,
+  PlotMouseEvent,
+  SceneCamera,
+} from "plotly.js";
 import { Streamlit } from "streamlit-component-lib";
 import "./styles.css";
 
@@ -83,6 +88,29 @@ const ModelCapture = ({ args }: Props) => {
     });
   }, []);
 
+  const handlePointClick = useCallback((eventData: PlotMouseEvent) => {
+    if (!eventData || !eventData.points || !eventData.points.length) {
+      return;
+    }
+
+    const point = eventData.points[0];
+    if (!point) {
+      return;
+    }
+
+    Streamlit.setComponentValue({
+      type: "click",
+      point: {
+        x: point.x ?? 0,
+        y: point.y ?? 0,
+        z: point.z ?? 0,
+        curveNumber: point.curveNumber ?? null,
+        pointNumber: point.pointNumber ?? null,
+        dataName: (point.data as { name?: string } | undefined)?.name ?? "",
+      },
+    });
+  }, []);
+
   useEffect(() => {
     if (!plotRef.current || !figure) {
       return;
@@ -125,6 +153,9 @@ const ModelCapture = ({ args }: Props) => {
       (graphDiv as unknown as {
         on?: (event: string, handler: (...args: unknown[]) => void) => void;
       }).on?.("plotly_relayout", handleRelayout as unknown as (...args: unknown[]) => void);
+      (graphDiv as unknown as {
+        on?: (event: string, handler: (...args: unknown[]) => void) => void;
+      }).on?.("plotly_click", handlePointClick as unknown as (...args: unknown[]) => void);
 
       plotlyInstanceRef.current = graphDiv;
     };
@@ -137,8 +168,11 @@ const ModelCapture = ({ args }: Props) => {
       (graphDiv as unknown as {
         removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
       })?.removeListener?.("plotly_relayout", handleRelayout as unknown as (...args: unknown[]) => void);
+      (graphDiv as unknown as {
+        removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
+      })?.removeListener?.("plotly_click", handlePointClick as unknown as (...args: unknown[]) => void);
     };
-  }, [figure, handleRelayout]);
+  }, [figure, handleRelayout, handlePointClick]);
 
   useEffect(() => {
     Streamlit.setFrameHeight(document.body.scrollHeight + 40);

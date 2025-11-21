@@ -95,7 +95,7 @@ def render_model_capture(
     height: int | None = None,
     key: str | None = None,
 ) -> dict[str, Any] | None:
-    """Render the custom capture component that returns a PNG."""
+    """Render the custom capture component that returns user interactions."""
 
     payload: ComponentReturn | None = _SNAPSHOT_CANVAS(
         component="capture",
@@ -106,10 +106,29 @@ def render_model_capture(
     )
     if payload is None:
         return None
-    return {
-        "image_data": payload.get("imageData"),
-        "notes": payload.get("notes"),
-    }
+
+    event_type = payload.get("type")
+    if not event_type:
+        if "imageData" in payload or "image_data" in payload:
+            event_type = "capture"
+        elif "point" in payload:
+            event_type = "click"
+
+    if event_type == "click":
+        point = payload.get("point")
+        if isinstance(point, dict):
+            return {"type": "click", "point": point}
+        return {"type": "click", "point": None}
+
+    if event_type == "capture":
+        image_data = payload.get("imageData") or payload.get("image_data")
+        return {
+            "type": "capture",
+            "image_data": image_data,
+            "notes": payload.get("notes"),
+        }
+
+    return payload
 
 
 __all__ = ["render_snapshot_canvas", "render_model_capture", "SnapshotCanvasResult"]
