@@ -15,9 +15,8 @@ from components import (
     render_chatbot_page,
     render_mcp_tools_page,
     render_navigation,
-    render_workspace_page,
-    render_workspace_viewer_fullpage,
 )
+from components.workspace import render_workspace_page, render_workspace_viewer_fullpage
 
 dotenv_spec = importlib.util.find_spec("dotenv")
 if dotenv_spec is not None:  # pragma: no cover - runtime import

@@ -15,7 +15,6 @@ except ImportError:  # pragma: no cover - optional dependency
     AzureOpenAI = None  # type: ignore[assignment]
 
 from backend import load_recent_jobs
-from .viewer import render_viewer_panel
 
 
 SYSTEM_PROMPT = textwrap.dedent(
@@ -72,7 +71,7 @@ def render_chatbot_page(embed: bool = False) -> None:
         return
 
     if latest_job is None:
-        st.title("Workspace")
+        st.title("AI Chatbot"),
         st.warning("Upload a DICOM study on the Upload & Convert page to unlock the chatbot.")
         if st.button("Go to Upload & Convert", type="primary"):
             st.session_state["active_page"] = "Uploader"
@@ -80,30 +79,24 @@ def render_chatbot_page(embed: bool = False) -> None:
         return
 
     st.markdown(CHAT_LAYOUT_CSS, unsafe_allow_html=True)
-    st.title("Workspace")
+    st.title("AI Chatbot"),
 
     snapshots = st.session_state.get("stl_snapshots", [])
     snapshot_options = {snap["snapshot_id"]: _format_snapshot_label(snap) for snap in snapshots}
 
-    chat_col, viewer_col = st.columns((3, 2), gap="large")
-
-    with chat_col:
-        st.markdown('<div class="chat-surface">', unsafe_allow_html=True)
-        selected_snapshots = _render_snapshot_selector(
-            snapshot_options,
-            label="Attach snapshots (optional)",
-            show_preview=True,
-        )
-        render_chat_panel(
-            compact=False,
-            snapshot_options=snapshot_options,
-            selected_snapshots=selected_snapshots,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with viewer_col:
-        render_viewer_panel(latest_job, enable_tools=True)
-        _render_context_metrics()
+    # Full-width chat surface without 3D viewer
+    st.markdown('<div class="chat-surface">', unsafe_allow_html=True)
+    selected_snapshots = _render_snapshot_selector(
+        snapshot_options,
+        label="Attach snapshots (optional)",
+        show_preview=True,
+    )
+    render_chat_panel(
+        compact=False,
+        snapshot_options=snapshot_options,
+        selected_snapshots=selected_snapshots,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_context_metrics() -> None:
