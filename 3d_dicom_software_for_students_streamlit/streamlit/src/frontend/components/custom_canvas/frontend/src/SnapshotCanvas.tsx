@@ -44,21 +44,56 @@ const SnapshotCanvas = ({ args }: Props) => {
   } = args ?? {};
 
   const canvasRef = useRef<ReactSketchCanvasRef>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [tool, setTool] = useState<Tool>("pen");
   const [color, setColor] = useState<string>(strokeColor);
   const [brushSize, setBrushSize] = useState<number>(4);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const canvasWidth = useMemo(() => frameWidth ?? 900, [frameWidth]);
-  const canvasHeight = useMemo(() => frameHeight ?? 600, [frameHeight]);
+  // Base (intrinsic) frame size coming from Python side
+  const baseWidth = useMemo(() => frameWidth ?? 900, [frameWidth]);
+  const baseHeight = useMemo(() => frameHeight ?? 600, [frameHeight]);
+  const baseAspect = useMemo(() => (baseWidth > 0 ? baseHeight / baseWidth : 1), [baseWidth, baseHeight]);
+
+  // Responsive display size that fits available width while preserving aspect ratio
+  const [displayWidth, setDisplayWidth] = useState<number>(baseWidth);
+  const [displayHeight, setDisplayHeight] = useState<number>(Math.round(baseWidth * baseAspect));
+
+  const updateResponsiveSize = useCallback(() => {
+    const availableContainerWidth = shellRef.current?.clientWidth ?? baseWidth;
+    const available = Math.max(1, Math.floor(Math.min(baseWidth, availableContainerWidth)));
+    const computedHeight = Math.max(1, Math.round(available * baseAspect));
+    setDisplayWidth(available);
+    setDisplayHeight(computedHeight);
+  }, [baseWidth, baseAspect]);
+
+  // Observe container width changes to keep canvas responsive
+  useEffect(() => {
+    updateResponsiveSize();
+    const container = canvasContainerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => {
+      updateResponsiveSize();
+      // Keep Streamlit iframe height in sync
+      Streamlit.setFrameHeight((shellRef.current?.scrollHeight ?? document.body.scrollHeight) + 40);
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [updateResponsiveSize]);
+
+  // Also update on base size changes (e.g., new snapshot)
+  useEffect(() => {
+    updateResponsiveSize();
+  }, [baseWidth, baseHeight, updateResponsiveSize]);
+
   const canvasStyle = useMemo(
     () => ({
-      width: `${canvasWidth}px`,
-      height: `${canvasHeight}px`,
+      width: `${displayWidth}px`,
+      height: `${displayHeight}px`,
     }),
-    [canvasWidth, canvasHeight],
+    [displayWidth, displayHeight],
   );
 
   const handleUndo = useCallback(() => {
@@ -146,15 +181,13 @@ const SnapshotCanvas = ({ args }: Props) => {
 
   // Update frame height for Streamlit
   useEffect(() => {
-    Streamlit.setFrameHeight(
-      (containerRef.current?.scrollHeight ?? 0) + 40
-    );
+    Streamlit.setFrameHeight((shellRef.current?.scrollHeight ?? document.body.scrollHeight) + 40);
   });
 
   return (
-    <div className="snapshot-shell" ref={containerRef}>
+    <div className="snapshot-shell" ref={shellRef}>
       {/* Drawing Area with Background */}
-      <div className="canvas-container" style={canvasStyle}>
+      <div className="canvas-container" ref={canvasContainerRef} style={canvasStyle}>
         {/* Background Image */}
         {backgroundImage && (
           <div
@@ -163,10 +196,10 @@ const SnapshotCanvas = ({ args }: Props) => {
               position: "absolute",
               top: 0,
               left: 0,
-              width: `${canvasWidth}px`,
-              height: `${canvasHeight}px`,
+              width: `${displayWidth}px`,
+              height: `${displayHeight}px`,
               backgroundImage: `url(${backgroundImage})`,
-              backgroundSize: "100% 100%",
+              backgroundSize: "contain", // ensure entire image is visible
               backgroundRepeat: "no-repeat",
               backgroundPosition: "center",
               pointerEvents: "none",
@@ -179,8 +212,8 @@ const SnapshotCanvas = ({ args }: Props) => {
         <div className="canvas-layer" style={canvasStyle}>
           <ReactSketchCanvas
             ref={canvasRef}
-            width={`${canvasWidth}px`}
-            height={`${canvasHeight}px`}
+            width={displayWidth}
+            height={displayHeight}
             strokeWidth={brushSize}
             strokeColor={tool === "eraser" ? "rgba(0,0,0,0)" : color}
             canvasColor="transparent"

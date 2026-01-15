@@ -16,6 +16,7 @@ from components import (
     render_mcp_tools_page,
     render_navigation,
     render_workspace_page,
+    render_workspace_viewer_fullpage,
 )
 
 dotenv_spec = importlib.util.find_spec("dotenv")
@@ -50,6 +51,8 @@ if pending_redirect and active_page != "Workspace":
 if active_page == "Uploader":
     render_workspace_page()
 elif active_page == "Workspace":
+    render_workspace_viewer_fullpage()
+elif active_page == "AI Chatbot":
     render_chatbot_page()
 else:
     render_mcp_tools_page()

@@ -29,7 +29,7 @@ def _load_snapshot_image(snapshot: dict[str, Any]) -> Image.Image:
     return Image.open(BytesIO(data)).convert("RGBA")
 
 
-def _snapshot_frame_dimensions(snapshot: dict[str, Any], max_width: int = 900) -> tuple[int, int]:
+def _snapshot_frame_dimensions(snapshot: dict[str, Any], max_width: int = 1200) -> tuple[int, int]:
     image = _load_snapshot_image(snapshot)
     width, height = image.size
     if width <= max_width:

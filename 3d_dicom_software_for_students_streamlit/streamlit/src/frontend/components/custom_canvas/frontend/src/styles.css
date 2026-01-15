@@ -34,6 +34,8 @@ body {
   background: #1a1a1a;
   border: 2px solid rgba(255, 255, 255, 0.1);
   margin: 0 auto;
+  width: 100%;
+  max-width: 1200px;
 }
 
 .canvas-layer {

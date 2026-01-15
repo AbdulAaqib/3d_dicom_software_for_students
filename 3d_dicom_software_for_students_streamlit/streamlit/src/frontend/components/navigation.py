@@ -17,6 +17,7 @@ class PageEntry:
 DEFAULT_PAGES: tuple[PageEntry, ...] = (
     PageEntry("Uploader", "📤 Upload & Convert"),
     PageEntry("Workspace", "🧱 Workspace"),
+    PageEntry("AI Chatbot", "🤖 AI Chatbot"),
     PageEntry("MCP Tools", "🧰 Tools & Automations"),
 )
 
@@ -46,7 +47,7 @@ def render_navigation(entries: Iterable[PageEntry] | None = None) -> str:
 
         for entry in entries:
             button_type = "primary" if active == entry.name else "secondary"
-            disabled = entry.name == "Workspace" and not has_conversions
+            disabled = entry.name in ("Workspace", "AI Chatbot") and not has_conversions
             if st.button(entry.label, width="stretch", type=button_type, disabled=disabled):
                 active = entry.name
                 st.session_state["active_page"] = entry.name
@@ -58,4 +59,3 @@ def render_navigation(entries: Iterable[PageEntry] | None = None) -> str:
         st.caption("Need help? Ask the GPT assistant anytime.")
 
     return active
-

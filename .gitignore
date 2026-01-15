@@ -50,3 +50,6 @@ dcm_examples/big_dicom/
 *.pyc
 
 3d_dicom_software_for_students_streamlit/streamlit/.cache
+
+dicom_v2_react
+VolView

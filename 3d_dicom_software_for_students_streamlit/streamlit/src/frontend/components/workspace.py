@@ -1,4 +1,4 @@
-"""Main DICOM → STL workspace view."""
+"""Main DICOM -> STL workspace view (ASCII-safe)."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def render_workspace_shell(show_title: bool = True, show_intro: bool = True) -> 
     st.divider()
     _render_conversion_status()
     st.divider()
-    st.subheader("3D Viewer & Snapshots")
+    st.subheader("3D Viewer and Snapshots")
     render_viewer_panel(_get_latest_job(), enable_tools=False)
 
 
@@ -51,11 +51,21 @@ def render_workspace_page() -> None:
     render_workspace_shell(show_title=True, show_intro=True)
 
 
+def render_workspace_viewer_fullpage() -> None:
+    """Full-page interactive STL viewer with tools and snapshots."""
+    st.title("Interactive STL viewer")
+    latest_job = _get_latest_job()
+    if latest_job is None:
+        st.info("Run a conversion to preview the generated mesh.")
+        return
+    render_viewer_panel(latest_job, enable_tools=True)
+
+
 def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> ConversionResult | None:
     with container:
         st.subheader("Upload a DICOM series")
         st.info(
-            "Drag-and-drop a `.zip` containing an entire study, or multiple `.dcm` files. "
+            "Drag-and-drop a .zip containing an entire study, or multiple .dcm files. "
             "Files stay local to this Streamlit session."
         )
         files = st.file_uploader(
@@ -66,7 +76,7 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
         )
         options = _render_option_controls(prefix="upload")
         if files:
-            st.caption(f"{len(files)} file(s) attached · ready to convert.")
+            st.caption(f"{len(files)} file(s) attached - ready to convert.")
         submitted = st.button(
             "Convert uploaded study",
             type="primary",
@@ -80,12 +90,12 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                 st.warning("Please add at least one DICOM slice or zip archive.")
                 return None
             try:
-                progress_bar = st.progress(0.0, text="Uploading DICOM files…")
+                progress_bar = st.progress(0.0, text="Uploading DICOM files...")
                 progress_status = st.empty()
 
                 def _update_progress(processed: int, total: int) -> None:
                     fraction = processed / max(total, 1)
-                    progress_bar.progress(fraction, text=f"Staging {processed}/{total} uploads…")
+                    progress_bar.progress(fraction, text=f"Staging {processed}/{total} uploads...")
                     progress_status.caption(f"Copied {processed} of {total} uploads")
 
                 with st.spinner("Staging upload and running dicom2stl..."):
@@ -99,7 +109,7 @@ def _render_upload_card(container: "st.delta_generator.DeltaGenerator") -> Conve
                 return result
             except PipelineError as exc:
                 st.error(str(exc))
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:  # defensive
                 st.exception(exc)
 
     return None
@@ -175,8 +185,8 @@ def _render_conversion_status() -> list[ConversionResult]:
 
 
 def _render_job_card(result: ConversionResult) -> None:
-    status = "✅ Success" if result.success else "⚠️ Failed"
-    with st.expander(f"{status} · {result.job.label} · {result.elapsed_seconds:.1f}s"):
+    status = "Success" if result.success else "Failed"
+    with st.expander(f"{status} - {result.job.label} - {result.elapsed_seconds:.1f}s"):
         st.write(f"STL: `{result.job.output_stl}`")
         if result.job.output_meta.exists():
             with result.job.output_meta.open() as meta_file:
@@ -193,7 +203,7 @@ def _render_job_card(result: ConversionResult) -> None:
 def _render_conversion_banner(result: ConversionResult) -> None:
     if result.success:
         st.success(
-            f"dicom2stl completed in {result.elapsed_seconds:.1f}s · STL saved to {result.job.output_stl}"
+            f"dicom2stl completed in {result.elapsed_seconds:.1f}s - STL saved to {result.job.output_stl}"
         )
     else:
         st.error(
@@ -213,4 +223,3 @@ def _reset_uploader_state() -> None:
 
     st.session_state.pop("dicom-upload", None)
     st.session_state.pop("convert-uploaded-study", None)
-

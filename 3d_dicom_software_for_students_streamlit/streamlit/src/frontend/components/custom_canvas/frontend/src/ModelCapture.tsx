@@ -220,8 +220,8 @@ const ModelCapture = ({ args }: Props) => {
 
   return (
     <div className="snapshot-shell">
-      <div className="canvas-wrap" style={{ minHeight: 480 }}>
-        <div ref={plotRef} style={{ width: "100%", height: 480 }} />
+      <div className="canvas-wrap" style={{ minHeight: 720 }}>
+        <div ref={plotRef} style={{ width: "100%", height: 720 }} />
       </div>
       <div className="actions">
         <button
