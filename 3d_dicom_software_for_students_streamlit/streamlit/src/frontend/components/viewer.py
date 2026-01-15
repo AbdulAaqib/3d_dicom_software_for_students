@@ -578,10 +578,13 @@ def _render_annotation_editor(job: ConversionResult, annotations: list[dict]) ->
     arrow_tip = _get_arrow_tip_point()
     last_label_point = _get_last_click_point()
 
-    marker_tab, arrow_tab, label_tab = st.tabs(["Markers", "Arrows", "Labels"])
+    # Persist tools tab selection across reruns to avoid jumping back
+    current_tab = st.session_state.get("tools_tab", "Markers")
+    tab_choice = st.radio("Tools", ["Markers", "Arrows", "Labels"], index=["Markers", "Arrows", "Labels"].index(current_tab), horizontal=True)
+    st.session_state["tools_tab"] = tab_choice
 
-    # --- Markers tab ---
-    with marker_tab:
+    # --- Markers panel ---
+    if tab_choice == "Markers":
         marker_prefix = f"marker-{job.job.job_id}"
         marker_label_key = f"{marker_prefix}-label"
         marker_color_key = f"{marker_prefix}-color"
@@ -644,8 +647,8 @@ def _render_annotation_editor(job: ConversionResult, annotations: list[dict]) ->
                     _set_flash_message("Marker saved.")
                     st.rerun()
 
-    # --- Arrows tab ---
-    with arrow_tab:
+    # --- Arrows panel ---
+    if tab_choice == "Arrows":
         arrow_prefix = f"arrow-{job.job.job_id}"
         arrow_label_key = f"{arrow_prefix}-label"
         arrow_color_key = f"{arrow_prefix}-color"
@@ -764,8 +767,8 @@ def _render_annotation_editor(job: ConversionResult, annotations: list[dict]) ->
                     _set_flash_message("Arrow saved.")
                     st.rerun()
 
-    # --- Labels tab ---
-    with label_tab:
+    # --- Labels panel ---
+    if tab_choice == "Labels":
         label_prefix = f"label-{job.job.job_id}"
         label_text_key = f"{label_prefix}-text"
         label_color_key = f"{label_prefix}-color"
